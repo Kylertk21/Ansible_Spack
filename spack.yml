@@ -1,0 +1,104 @@
+- name: Setup Spack on control node
+  tags: setup
+  become: true
+  hosts: local
+
+  tasks:
+    - name: Clone spack to control node
+      ansible.builtin.git:
+        repo: https://github.com/spack/spack.git
+        depth: 2
+        dest: /opt/spack
+
+    - name: Add spack to control node profile
+      copy:
+        dest: /etc/profile.d/spack.sh
+        content: |
+          export SPACK_ROOT=/opt/spack
+          source $SPACK_ROOT/share/spack/setup-env.sh
+        mode: '0644'
+
+    - name: Create spack-packages directory
+      file:
+        path: /opt/spack-packages
+        state: directory
+
+    - name: Export /opt/spack-packages to NFS
+      lineinfile:
+        path: /etc/exports
+        line: "/opt/spack-packages 10.0.20.0/24(rw,no_root_squash)"
+        create: yes
+
+    - name: Reload NFS exports
+      command: exportfs -ra
+
+
+- name: Create mounts
+  tags: mount
+  become: true
+  hosts: cluster
+
+  tasks:
+    - name: Create mount points
+      file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - /opt/spack
+        - /opt/spack-packages
+
+    - name: Mount spack to nodes
+      mount:
+        src: "10.0.20.1:/opt/spack"
+        path: /opt/spack
+        fstype: nfs
+        opts: rw,hard,intr
+        state: mounted
+
+    - name: Mount spack packages to nodes
+      mount:
+        src: "10.0.20.1:/opt/spack-packages"
+        path: /opt/spack-packages
+        fstype: nfs
+        opts: rw,hard,intr
+        state: mounted
+
+    - name: Add spack to node profiles
+      copy:
+        dest: /etc/profile.d/spack.sh
+        content: |
+          export SPACK_ROOT=/opt/spack
+          source $SPACK_ROOT/share/spack/setup-env.sh
+        mode: '0644'
+
+
+- name: Sync Spack to nodes
+  tags: sync
+  become: true
+  hosts: cluster
+
+  tasks:
+    - name: Change bashrc, activate env
+      blockinfile:
+        path: /root/.bashrc
+        marker: "# {mark} SPACK SETUP"
+        block: |
+          source /opt/spack/opt/spack/linux-zen2/lmod-9.1.2-xzhozpxc2nyqvupf6et4olmab252l73m/lmod/9.1.2/init/bash
+          export SPACK_ROOT=/opt/spack
+          source /opt/spack/share/spack/setup-env.sh
+          export MODULEPATH=/opt/spack/share/spack/lmod/linux-rocky9-x86_64/Core
+          spack env activate mpi
+        create: yes
+
+    - name: Source bashrc
+      ansible.builtin.shell: "source /root/.bashrc"
+
+    - name: Check spack env
+      ansible.builtin.shell: "spack env status"
+      register: spack_env_status
+
+    - name: Display env status
+      ansible.builtin.debug:
+        var: spack_env_status.stdout_lines
+
+
