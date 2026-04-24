@@ -2,6 +2,7 @@
   tags: setup
   become: true
   hosts: local
+  connection: local
 
   tasks:
     - name: Clone spack to control node
@@ -18,10 +19,16 @@
           source $SPACK_ROOT/share/spack/setup-env.sh
         mode: '0644'
 
+    - name: Activate profile.d
+      ansible.builtin.shell: source /etc/profile.d/spack.sh
+
     - name: Create spack-packages directory
       file:
         path: /opt/spack-packages
         state: directory
+
+    - name: Activate nfs service
+      ansible.builtin.shell: systemctl start rpcbind nfs-server
 
     - name: Export /opt/spack-packages to NFS
       lineinfile:
@@ -36,7 +43,7 @@
 - name: Create mounts
   tags: mount
   become: true
-  hosts: cluster
+  hosts: compute
 
   tasks:
     - name: Create mount points
@@ -71,11 +78,32 @@
           source $SPACK_ROOT/share/spack/setup-env.sh
         mode: '0644'
 
+- name: Install lmod
+  tags: install_lmod
+  hosts: local
+  connection: local
+
+  tasks:
+    - name: Spack Install Lmod
+      ansible.builtin.shell: spack install lmod
+
+    - name: Load lmod
+      ansible.builtin.shell: spack load lmod
+
+    - name: Store lmod path
+      command: spack location -i lmod
+      register: lmod_path
+      changed_when: false
+
+    - name: Set lmod path as global
+      set_fact:
+        lmod_init_path: "{{ lmod_path.stdout }}"
+
 
 - name: Sync Spack to nodes
   tags: sync
   become: true
-  hosts: cluster
+  hosts: compute
 
   tasks:
     - name: Change bashrc, activate env
@@ -83,11 +111,10 @@
         path: /root/.bashrc
         marker: "# {mark} SPACK SETUP"
         block: |
-          source /opt/spack/opt/spack/linux-zen2/lmod-9.1.2-xzhozpxc2nyqvupf6et4olmab252l73m/lmod/9.1.2/init/bash
+          source {{ hostvars['localhost']['lmod_init_path']  }}/lmod/9.1.2/init/bash
           export SPACK_ROOT=/opt/spack
           source /opt/spack/share/spack/setup-env.sh
           export MODULEPATH=/opt/spack/share/spack/lmod/linux-rocky9-x86_64/Core
-          spack env activate mpi
         create: yes
 
     - name: Source bashrc
